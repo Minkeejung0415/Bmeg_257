@@ -101,6 +101,7 @@ def run_live(
     baud: int = 115_200,
     food_state: str = 'fasted',
     body_weight_kg: float = 70.0,
+    lag_time_hr: float = 0.0,
     baseline_file: str = 'baseline.json',
     sessions_dir: str = 'sessions',
     skip_baseline: bool = False,
@@ -111,12 +112,15 @@ def run_live(
     print(f"  Port        : {port}")
     print(f"  Food state  : {food_state}")
     print(f"  Body weight : {body_weight_kg:.0f} kg")
+    print(f"  Lag time    : {lag_time_hr:.2f} hr  "
+          f"({'solution' if lag_time_hr == 0 else 'capsule/tablet' if lag_time_hr >= 0.3 else 'coffee/tea'})")
 
     # ── Initialise modules ────────────────────────────────────────────────────
     ingestion  = SerialIngestion(port=port, baud=baud, sessions_dir=sessions_dir)
     processor  = SignalProcessor(fs=100)
     calibration= Calibration(baseline_file=baseline_file)
-    pk         = PKModel(body_weight_kg=body_weight_kg, food_state=food_state)
+    pk         = PKModel(body_weight_kg=body_weight_kg, food_state=food_state,
+                         lag_time_hr=lag_time_hr)
     estimator  = ConcentrationEstimator(calibration, pk)
 
     print(calibration.summary())
@@ -256,6 +260,7 @@ def run_replay(
     session_csv: str,
     food_state: str = 'fasted',
     body_weight_kg: float = 70.0,
+    lag_time_hr: float = 0.0,
     baseline_file: str = 'baseline.json',
     speed: float = 1.0,
     plot: bool = True,
@@ -274,7 +279,8 @@ def run_replay(
 
     processor   = SignalProcessor(fs=100)
     calibration = Calibration(baseline_file=baseline_file)
-    pk          = PKModel(body_weight_kg=body_weight_kg, food_state=food_state)
+    pk          = PKModel(body_weight_kg=body_weight_kg, food_state=food_state,
+                          lag_time_hr=lag_time_hr)
     estimator   = ConcentrationEstimator(calibration, pk,
                                          session_start_time=None)
 
@@ -528,7 +534,9 @@ def run_validate() -> None:
     res1 = pk.validate_against_reference(BONATI_1982)
     res2 = pk.validate_against_reference(BLANCHARD_SAWERS_1983)
 
-    target_mae = 0.5  # mg/L — roughly equivalent to ±20 mg at 70 kg, Vd=42 L
+    # 0.5 mg/L ≈ ±20 mg at 70 kg (Vd=42 L).  Both datasets now pass with
+    # formulation-appropriate lag times encoded in each reference dict.
+    target_mae = 0.5  # mg/L
     for name, res in [("Bonati 1982", res1), ("Blanchard & Sawers 1983", res2)]:
         status = GREEN("PASS") if res['mae'] < target_mae else RED("FAIL")
         print(f"\n  {name}: {status}  MAE={res['mae']:.3f} mg/L")
@@ -581,6 +589,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_live.add_argument('--baud',        type=int,   default=115_200)
     p_live.add_argument('--food-state',  choices=['fasted', 'fed'], default='fasted',
                         help='Controls caffeine absorption rate (fasted = ka=3 hr⁻¹, fed = ka=0.8 hr⁻¹)')
+    p_live.add_argument('--lag-time',   type=float, default=0.0,
+                        help='Absorption lag time in hours (0=solution, 0.4=capsule/tablet)')
     p_live.add_argument('--weight',      type=float, default=70.0,
                         help='Body weight in kg (scales Vd)')
     p_live.add_argument('--baseline',    default='baseline.json',
@@ -594,6 +604,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_replay = sub.add_parser('replay', help='Process a saved session CSV offline')
     p_replay.add_argument('session_csv', help='Path to session_YYYYMMDD_HHMMSS.csv')
     p_replay.add_argument('--food-state',  choices=['fasted', 'fed'], default='fasted')
+    p_replay.add_argument('--lag-time',    type=float, default=0.0,
+                          help='Absorption lag time in hours (0=solution, 0.4=capsule/tablet)')
     p_replay.add_argument('--weight',      type=float, default=70.0)
     p_replay.add_argument('--baseline',    default='baseline.json')
     p_replay.add_argument('--speed',       type=float, default=0,
@@ -616,6 +628,7 @@ def main() -> None:
             baud            = args.baud,
             food_state      = args.food_state,
             body_weight_kg  = args.weight,
+            lag_time_hr     = args.lag_time,
             baseline_file   = args.baseline,
             sessions_dir    = args.sessions_dir,
             skip_baseline   = args.skip_baseline,
@@ -626,6 +639,7 @@ def main() -> None:
             session_csv     = args.session_csv,
             food_state      = args.food_state,
             body_weight_kg  = args.weight,
+            lag_time_hr     = args.lag_time,
             baseline_file   = args.baseline,
             speed           = args.speed,
             plot            = not args.no_plot,

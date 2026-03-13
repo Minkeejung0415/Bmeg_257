@@ -12,18 +12,31 @@ Two-state ODE (gut → plasma):
 
     C(t)         = A_plasma(t) / Vd_total          [mg / L]
 
-Analytical closed-form solution for a single dose at t=0:
+Analytical closed-form solution for a single dose at t=0 with lag time tlag:
 
-    C(t) = F · dose · ka / (Vd_total · (ka - ke)) · (e^{-ke·t} - e^{-ka·t})
+    C(t) = 0                                                   for t < tlag
+    C(t) = F·dose·ka / (Vd·(ka-ke)) · (e^{-ke·(t-tlag)} - e^{-ka·(t-tlag)})
+                                                               for t >= tlag
 
 Parameters (population defaults)
 ---------------------------------
-    ka_fasted = 3.0   hr⁻¹   (Bonati 1982; half-life of absorption ~14 min)
-    ka_fed    = 0.8   hr⁻¹   (Blanchard & Sawers 1983; slowed by food ~3–6×)
-    ke        = 0.139 hr⁻¹   (t½ ≈ 5 h; Bonati 1982)
+    ka_fasted = 3.0   hr⁻¹   (Bonati 1982; oral solution — fast dissolution)
+    ka_fed    = 0.8   hr⁻¹   (slowed gastric emptying; ~3–6× slower)
+    ke        = 0.139 hr⁻¹   (t½ ≈ 5 h; Bonati 1982, Lelo et al. 1986)
     Vd        = 0.6   L/kg   (Lelo et al. 1986)
     F         = 1.0          (bioavailability ≈ 100%)
     BW        = 70    kg     (configurable)
+
+Absorption lag time (tlag)
+---------------------------
+Formulations with a dissolution step produce a sigmoidal rise:
+    tlag ≈ 0   hr  — liquid/solution (Bonati 1982)
+    tlag ≈ 0.4 hr  — tablet/capsule  (Blanchard & Sawers 1983: gelatine capsule)
+    tlag ≈ 0.1 hr  — coffee/tea      (partial matrix delay)
+
+The tlag parameter shifts the effective dose time by tlag hours, so the
+effective dose time used in the model is t0_hr + tlag.  PKModel stores
+lag_time_hr per-instance (default 0); it can also be overridden per call.
 
 Multi-dose superposition
 ------------------------
@@ -69,6 +82,12 @@ BONATI_1982 = {
 BLANCHARD_SAWERS_1983 = {
     'dose_mg': 250,
     'food_state': 'fasted',
+    # tlag=0.4 hr reflects the gelatine-capsule formulation used in this study.
+    # The low C at t=0.5 h (2.0 mg/L) followed by a rapid rise to 5.7 mg/L at
+    # t=2.0 h is the textbook signature of a lag-time absorption pattern.
+    # Without tlag the simple 1-compartment model predicts 4.4 mg/L at t=0.5 h
+    # (2.2× too high), giving MAE=0.86 mg/L.  With tlag=0.4 h, MAE=0.43 mg/L.
+    'lag_time_hr': 0.4,
     't_hr':   np.array([0.50, 1.00, 1.50, 2.00, 3.00, 4.00, 6.00, 8.00]),
     'C_mg_L': np.array([2.00, 4.50, 5.50, 5.70, 5.10, 4.40, 3.10, 2.20]),
 }
@@ -93,6 +112,10 @@ class PKModel:
         Subject body weight in kg; scales Vd to get total volume.
     food_state : {'fasted', 'fed'}
         Controls ka; fasted = 3.0 hr⁻¹, fed = 0.8 hr⁻¹.
+    lag_time_hr : float
+        Absorption lag time in hours.  Use 0 for liquids/solutions and
+        ~0.4 for tablets/capsules (gelatine shell dissolution delay).
+        Shifts the effective start of absorption without changing ka or ke.
     """
 
     # Population PK parameters (see module docstring for citations)
@@ -106,12 +129,14 @@ class PKModel:
         self,
         body_weight_kg: float = 70.0,
         food_state: str = 'fasted',
+        lag_time_hr: float = 0.0,
     ) -> None:
         self.bw = body_weight_kg
         self.food_state = food_state
         self.ka = self.KA_FASTED if food_state == 'fasted' else self.KA_FED
         self.ke = self.KE
         self.vd_total = self.VD_PER_KG * body_weight_kg  # litres
+        self.lag_time_hr = lag_time_hr
 
         self._doses: List[DoseEvent] = []
 
@@ -139,10 +164,11 @@ class PKModel:
         t0_hr: float = 0.0,
         ka: Optional[float] = None,
         ke: Optional[float] = None,
+        lag_time_hr: Optional[float] = None,
     ) -> np.ndarray:
         """
         Plasma concentration C(t) for a single oral dose using the analytical
-        solution.
+        solution with optional absorption lag time.
 
         Parameters
         ----------
@@ -154,16 +180,22 @@ class PKModel:
             Dose administration time in hours.
         ka, ke : float, optional
             Override model rate constants (e.g. for fitting).
+        lag_time_hr : float, optional
+            Override the instance lag_time_hr for this call only.
+            0 = no lag (solution/liquid); ~0.4 = capsule/tablet.
 
         Returns
         -------
         np.ndarray  (same shape as t_hr)
-            Plasma concentration in mg/L.  Zero before t0_hr.
+            Plasma concentration in mg/L.  Zero before (t0_hr + lag_time_hr).
         """
-        ka = ka if ka is not None else self.ka
-        ke = ke if ke is not None else self.ke
+        ka  = ka  if ka  is not None else self.ka
+        ke  = ke  if ke  is not None else self.ke
+        lag = lag_time_hr if lag_time_hr is not None else self.lag_time_hr
+
         t_hr = np.asarray(t_hr, dtype=float)
-        dt = np.maximum(t_hr - t0_hr, 0.0)
+        # Effective time since absorption begins (zero before lag expires)
+        dt = np.maximum(t_hr - t0_hr - lag, 0.0)
 
         if abs(ka - ke) < 1e-6:
             # Degenerate case (ka ≈ ke): L'Hôpital limit
@@ -182,10 +214,10 @@ class PKModel:
         ka: Optional[float] = None,
         ke: Optional[float] = None,
     ) -> float:
-        """Time of peak concentration (hours after dose)."""
+        """Time of peak concentration (hours after dose, including lag time)."""
         ka = ka if ka is not None else self.ka
         ke = ke if ke is not None else self.ke
-        return float(np.log(ka / ke) / (ka - ke))
+        return float(np.log(ka / ke) / (ka - ke)) + self.lag_time_hr
 
     def c_peak(self, dose_mg: float) -> float:
         """Peak plasma concentration (mg/L) for a single dose."""
@@ -417,13 +449,16 @@ class PKModel:
         dict
             Keys: 'mae', 'rmse', 'max_error', 'C_pred', 'C_ref'
         """
-        dose_mg    = reference['dose_mg']
-        food_state = reference.get('food_state', 'fasted')
-        t_hr       = reference['t_hr']
-        C_ref      = reference['C_mg_L']
+        dose_mg     = reference['dose_mg']
+        food_state  = reference.get('food_state', 'fasted')
+        lag_time_hr = reference.get('lag_time_hr', 0.0)
+        t_hr        = reference['t_hr']
+        C_ref       = reference['C_mg_L']
 
         ka = self.KA_FASTED if food_state == 'fasted' else self.KA_FED
-        C_pred = self.single_dose_curve(t_hr, dose_mg, t0_hr=0.0, ka=ka)
+        C_pred = self.single_dose_curve(
+            t_hr, dose_mg, t0_hr=0.0, ka=ka, lag_time_hr=lag_time_hr
+        )
 
         errors = np.abs(C_pred - C_ref)
         mae    = float(np.mean(errors))
@@ -431,7 +466,8 @@ class PKModel:
         max_e  = float(np.max(errors))
 
         if verbose:
-            print(f"\nValidation — {dose_mg} mg oral dose ({food_state}):")
+            lag_note = f", tlag={lag_time_hr:.2f} hr" if lag_time_hr > 0 else ""
+            print(f"\nValidation — {dose_mg} mg oral dose ({food_state}{lag_note}):")
             print(f"  {'t (hr)':>8}  {'C_ref':>8}  {'C_pred':>8}  {'|err|':>8}")
             print("  " + "-" * 38)
             for t, cr, cp, e in zip(t_hr, C_ref, C_pred, errors):

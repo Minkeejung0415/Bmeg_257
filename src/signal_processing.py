@@ -323,10 +323,11 @@ class SignalProcessor:
             average='mean',
         )
 
-        # Integrate PSD over 8–12 Hz band
+        # Integrate PSD over 8–12 Hz band (np.trapz removed in NumPy 2.0)
+        _trapz = getattr(np, 'trapezoid', getattr(np, 'trapz', None))
         mask = (freqs >= 8.0) & (freqs <= 12.0)
         if mask.any():
-            band_power = float(np.trapz(psd[mask], freqs[mask]))
+            band_power = float(_trapz(psd[mask], freqs[mask]))
         else:
             band_power = 0.0
 

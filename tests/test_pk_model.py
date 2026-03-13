@@ -147,33 +147,70 @@ class TestValidation:
     """
     Validate simulated curves against published reference data.
 
-    Tolerance notes:
-    - Bonati 1982 (162 mg, n=9): tight tolerance; parameters partly derived here.
-    - Blanchard & Sawers 1983 (250 mg, n=6): looser tolerance because their early
-      time points (t=0.5 h, C=2.0 mg/L) suggest a slower-absorbing formulation
-      than the population-average ka=3.0 hr⁻¹.  This inter-study variability is
-      expected and is exactly why per-subject calibration is required.
+    Both datasets now use a 0.5 mg/L MAE threshold.
+    Bonati 1982 used an oral caffeine solution (tlag=0).
+    Blanchard & Sawers 1983 used gelatine capsules (tlag=0.4 hr encoded in
+    BLANCHARD_SAWERS_1983['lag_time_hr']).
     """
+
+    TOLERANCE_MAE_MG_L = 0.5  # mg/L — both datasets should achieve this
 
     def test_bonati_1982(self):
         pk = PKModel(body_weight_kg=70, food_state='fasted')
         results = pk.validate_against_reference(BONATI_1982, verbose=False)
-        tolerance = 0.6   # mg/L
-        assert results['mae'] < tolerance, (
+        assert results['mae'] < self.TOLERANCE_MAE_MG_L, (
             f"Bonati 1982 MAE={results['mae']:.3f} mg/L exceeds "
-            f"tolerance {tolerance} mg/L"
+            f"tolerance {self.TOLERANCE_MAE_MG_L} mg/L"
         )
 
     def test_blanchard_sawers_1983(self):
+        """Blanchard capsule formulation: tlag=0.4 hr brings MAE to ~0.43 mg/L."""
         pk = PKModel(body_weight_kg=70, food_state='fasted')
         results = pk.validate_against_reference(BLANCHARD_SAWERS_1983, verbose=False)
-        # Wider tolerance: Blanchard's formulation absorbed slower than ka=3.0 predicts
-        # (inter-study variability — personal calibration addresses this)
-        tolerance = 1.2   # mg/L
-        assert results['mae'] < tolerance, (
+        assert results['mae'] < self.TOLERANCE_MAE_MG_L, (
             f"Blanchard 1983 MAE={results['mae']:.3f} mg/L exceeds "
-            f"tolerance {tolerance} mg/L"
+            f"tolerance {self.TOLERANCE_MAE_MG_L} mg/L"
         )
+
+
+class TestLagTime:
+    """Tests for the absorption lag-time parameter."""
+
+    def test_lag_delays_onset(self):
+        """With lag=0.5 hr, concentration at t=0.3 hr must be zero."""
+        pk = PKModel(lag_time_hr=0.5)
+        C = pk.single_dose_curve(np.array([0.0, 0.3, 0.49]), 200)
+        np.testing.assert_array_equal(C, 0.0)
+
+    def test_lag_shifts_peak(self):
+        """t_peak with lag should equal t_peak without lag plus the lag duration."""
+        pk_no_lag  = PKModel(lag_time_hr=0.0)
+        pk_lag     = PKModel(lag_time_hr=0.5)
+        assert pk_lag.t_peak() == pytest.approx(pk_no_lag.t_peak() + 0.5, rel=1e-6)
+
+    def test_lag_preserves_auc(self):
+        """Adding a lag shifts the curve in time but should not alter total AUC
+        (integral from lag onward equals integral from 0 without lag)."""
+        lag = 0.4
+        pk_no_lag = PKModel(lag_time_hr=0.0)
+        pk_lag    = PKModel(lag_time_hr=lag)
+        t_long = np.linspace(0, 24, 2400)
+        C_no_lag = pk_no_lag.single_dose_curve(t_long, 200)
+        C_lag    = pk_lag.single_dose_curve(t_long, 200)
+        _trapz = getattr(np, 'trapezoid', None) or getattr(np, 'trapz')
+        auc_no_lag = float(_trapz(C_no_lag, t_long))
+        auc_lag    = float(_trapz(C_lag,    t_long))
+        # Both AUCs should be within 1% (small difference from truncation at 24 h)
+        assert abs(auc_no_lag - auc_lag) / auc_no_lag < 0.01
+
+    def test_blanchard_lag_lowers_mae(self):
+        """Applying tlag=0.4 to Blanchard data must give lower MAE than tlag=0."""
+        pk = PKModel(body_weight_kg=70, food_state='fasted')
+        res_no_lag = pk.validate_against_reference(
+            {**BLANCHARD_SAWERS_1983, 'lag_time_hr': 0.0}, verbose=False
+        )
+        res_lag = pk.validate_against_reference(BLANCHARD_SAWERS_1983, verbose=False)
+        assert res_lag['mae'] < res_no_lag['mae']
 
 
 class TestODESimulation:
