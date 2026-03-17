@@ -67,10 +67,10 @@ from scipy.optimize import minimize_scalar
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 # Minimum resting-window duration before baseline is considered valid
-MIN_BASELINE_SECONDS: float = 180.0   # 3 minutes
+MIN_BASELINE_SECONDS: float = 20.0   # 30 s
 
 # Expected HR update interval used to convert seconds → sample count
-HR_UPDATE_INTERVAL_S: float = 5.0     # signal_processing fires HR every 5 s
+HR_UPDATE_INTERVAL_S: float = 1.0     # signal_processing fires HR every 5 s
 
 # Motion-artefact gate: reject windows with raw tremor RMS above this
 DEFAULT_REST_MOTION_THRESHOLD_MS2: float = 0.15   # m/s² — tune per subject
