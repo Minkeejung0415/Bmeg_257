@@ -5,7 +5,7 @@ Two-phase calibration workflow:
 
 Phase 1 — Per-session resting baseline (REQUIRED before any caffeine)
 ----------------------------------------------------------------------
-Run for 3–5 minutes while the subject sits still.  Computes:
+Run for at least 30 seconds while the subject sits still.  Computes:
     baseline_hr          : median resting heart rate (BPM)
     baseline_tremor_rms  : median resting tremor RMS (m/s²)
 
@@ -36,7 +36,7 @@ Usage
 -----
     cal = Calibration()
 
-    # Phase 1 – collect 3–5 min of resting data
+    # Phase 1 – collect at least 30 s of resting data
     cal.start_baseline_capture()
     while not cal.baseline_complete:
         hr_result, tremor_result = processor.add_sample(...)
@@ -67,7 +67,7 @@ from scipy.optimize import minimize_scalar
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 # Minimum resting-window duration before baseline is considered valid
-MIN_BASELINE_SECONDS: float = 20.0   # 30 s
+MIN_BASELINE_SECONDS: float = 30.0
 
 # Expected HR update interval used to convert seconds → sample count
 HR_UPDATE_INTERVAL_S: float = 1.0     # signal_processing fires HR every 5 s
@@ -216,7 +216,7 @@ class Calibration:
         if len(self._hr_samples) < 2:
             raise RuntimeError(
                 "Insufficient baseline samples — run start_baseline_capture() "
-                "and add_baseline_sample() for at least 3 minutes."
+                "and add_baseline_sample() for at least 30 seconds."
             )
 
         self._capturing = False

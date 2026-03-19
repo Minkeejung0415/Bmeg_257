@@ -19,6 +19,7 @@
 // Hardware objects
 ICM42688 imu(Wire, 0x68);
 MAX30105 ppgSensor;
+static bool imuReady = false;
 
 // Timing
 static const uint32_t SAMPLE_INTERVAL_US = 10000UL; // 100 Hz
@@ -28,14 +29,16 @@ static uint32_t lastSampleUs = 0;
 static uint16_t seqCounter = 0;
 
 // LED brightness
-static const byte LED_BRIGHTNESS = 127;
+static const byte LED_BRIGHTNESS = 32;
 static constexpr float G_TO_MSS = 9.80665f;
+static const bool REQUIRE_IMU = false; // true: fail boot if IMU is missing
+static uint32_t lastPpgValue = 0;
 
 void setup() {
   Serial.begin(115200);
 
 #if defined(ARDUINO_ARCH_ESP32)
-  delay(250);
+  delay(1000);
 #else
   while (!Serial) { ; }
 #endif
@@ -45,16 +48,25 @@ void setup() {
 #else
   Wire.begin();
 #endif
-  Wire.setClock(400000);
+  Wire.setClock(100000);
 
-  if (imu.begin() < 0) {
+  for (uint8_t tries = 0; tries < 5 && !imuReady; ++tries) {
+    imuReady = (imu.begin() >= 0);
+    if (!imuReady) delay(200);
+  }
+  if (!imuReady && REQUIRE_IMU) {
     Serial.println("ERR:IMU_INIT");
     while (true) { delay(1000); }
   }
-  imu.setAccelODR(ICM42688::odr100);
-  imu.setGyroODR(ICM42688::odr100);
-  imu.setAccelFS(ICM42688::gpm4);
-  imu.setGyroFS(ICM42688::dps500);
+  if (!imuReady) {
+    Serial.println("ERR:IMU_INIT_OPTIONAL");
+  }
+  if (imuReady) {
+    imu.setAccelODR(ICM42688::odr100);
+    imu.setGyroODR(ICM42688::odr100);
+    imu.setAccelFS(ICM42688::gpm4);
+    imu.setGyroFS(ICM42688::dps500);
+  }
 
   if (!ppgSensor.begin(Wire, I2C_SPEED_FAST)) {
     Serial.println("ERR:PPG_INIT");
@@ -63,11 +75,11 @@ void setup() {
 
   ppgSensor.setup(
     LED_BRIGHTNESS, // LED current
-    1,              // sampleAverage
+    4,              // sampleAverage
     1,              // ledMode: HR mode (Red)
     100,            // sampleRate
     411,            // pulseWidth
-    4096            // adcRange
+    16384           // adcRange
   );
 
   ppgSensor.writeRegister8(0x57, 0x09, 0x02);
@@ -81,21 +93,29 @@ void loop() {
   if (now - lastSampleUs < SAMPLE_INTERVAL_US) return;
   lastSampleUs += SAMPLE_INTERVAL_US;
 
-  if (imu.getAGT() < 0) return;
+  float ax = 0.0f;
+  float ay = 0.0f;
+  float az = 0.0f;
+  float gx = 0.0f;
+  float gy = 0.0f;
+  float gz = 0.0f;
 
-  float ax = imu.accX() * G_TO_MSS;
-  float ay = imu.accY() * G_TO_MSS;
-  float az = imu.accZ() * G_TO_MSS;
-  float gx = imu.gyrX();
-  float gy = imu.gyrY();
-  float gz = imu.gyrZ();
+  if (imuReady && imu.getAGT() >= 0) {
+    ax = imu.accX() * G_TO_MSS;
+    ay = imu.accY() * G_TO_MSS;
+    az = imu.accZ() * G_TO_MSS;
+    gx = imu.gyrX();
+    gy = imu.gyrY();
+    gz = imu.gyrZ();
+  }
 
-  uint32_t ppgValue = 0;
+  uint32_t ppgValue = lastPpgValue;
   ppgSensor.check();
   while (ppgSensor.available()) {
     ppgValue = ppgSensor.getFIFORed();
     ppgSensor.nextSample();
   }
+  lastPpgValue = ppgValue;
 
   Serial.print(seqCounter); Serial.print(',');
   Serial.print(millis());   Serial.print(',');

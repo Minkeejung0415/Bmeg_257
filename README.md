@@ -227,3 +227,26 @@ seq,ts_ms,ax,ay,az,gx,gy,gz,ppg
 - Blanchard J. & Sawers S.J.A. (1983). The absolute bioavailability of caffeine in man. *European Journal of Clinical Pharmacology*, 24(1), 93–98.
 - Graham T.E. & Spriet L.L. (1995). Metabolic, catecholamine, and exercise performance responses to varying doses of caffeine. *Journal of Applied Physiology*, 78(3), 867–874.
 - Hallett M. (1998). Overview of human tremor physiology. *Movement Disorders*, 13(S3), 43–48.
+
+---
+
+## Split USB bridge mode (IMU and PPG on different boards)
+
+If your IMU and PPG are connected to different USB serial devices, capture both
+streams and merge them into one replay-compatible session CSV:
+
+```powershell
+python src/dual_usb_capture.py --imu-port COM5 --ppg-port COM3
+```
+
+Then run the estimator on the merged file:
+
+```powershell
+python src/main.py replay sessions/session_YYYYMMDD_HHMMSS.csv
+```
+
+Notes:
+- The bridge emits the same session columns used by replay mode:
+  `wall_time,seq,ts_ms,ax,ay,az,gx,gy,gz,ppg,dropped_before`
+- If an IMU sample is too stale, the row is still written with zeroed IMU
+  values so logging never blocks.

@@ -1,13 +1,13 @@
-"""
-ingestion.py – Module 1
+﻿"""
+ingestion.py â€“ Module 1
 =======================
 Dedicated serial reader thread that:
-  • Never blocks the main thread (all I/O in a daemon thread).
-  • Parses ASCII CSV packets: seq,ts_ms,ax,ay,az,gx,gy,gz,ppg
-  • Detects dropped packets via 16-bit sequence-counter gaps.
-  • Logs every raw packet (valid or malformed) to a timestamped
+  â€¢ Never blocks the main thread (all I/O in a daemon thread).
+  â€¢ Parses ASCII CSV packets: seq,ts_ms,ax,ay,az,gx,gy,gz,ppg
+  â€¢ Detects dropped packets via 16-bit sequence-counter gaps.
+  â€¢ Logs every raw packet (valid or malformed) to a timestamped
     session_YYYYMMDD_HHMMSS.csv in the sessions/ directory.
-  • Exposes a thread-safe queue so downstream modules can consume
+  â€¢ Exposes a thread-safe queue so downstream modules can consume
     parsed rows without ever touching the serial port.
 
 Usage
@@ -39,7 +39,7 @@ from typing import Optional
 
 import serial
 
-# ── Packet format ─────────────────────────────────────────────────────────────
+# â”€â”€ Packet format â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Columns transmitted by Arduino firmware
 _FIRMWARE_COLUMNS = ('seq', 'ts_ms', 'ax', 'ay', 'az', 'gx', 'gy', 'gz', 'ppg')
 
@@ -54,7 +54,10 @@ SensorRow = namedtuple('SensorRow', SESSION_COLUMNS)
 _QUEUE_MAXSIZE = 6_000
 
 # How long (seconds) to wait for a line from the serial port before looping
-_SERIAL_READ_TIMEOUT = 0.05  # 50 ms — keeps stop_event responsive
+_SERIAL_READ_TIMEOUT = 0.05  # 50 ms â€” keeps stop_event responsive
+
+# Large jumps usually mean device reset/corrupt line, not true packet loss.
+_MAX_REASONABLE_SEQ_GAP = 1_000
 
 
 class SerialIngestion:
@@ -98,7 +101,7 @@ class SerialIngestion:
         self.total_dropped: int = 0   # sum of sequence gaps
         self._last_seq: Optional[int] = None
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    # â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def start(self) -> None:
         """Open the serial port and start the reader thread."""
@@ -133,7 +136,7 @@ class SerialIngestion:
             return None
 
     def get_nowait(self) -> Optional[SensorRow]:
-        """Non-blocking variant — returns None immediately if queue is empty."""
+        """Non-blocking variant â€” returns None immediately if queue is empty."""
         try:
             return self._queue.get_nowait()
         except queue.Empty:
@@ -147,10 +150,10 @@ class SerialIngestion:
             return 0.0
         return self.total_dropped / expected
 
-    # ── Internal ──────────────────────────────────────────────────────────────
+    # â”€â”€ Internal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _reader_loop(self) -> None:
-        """Main loop — runs in its own daemon thread."""
+        """Main loop â€” runs in its own daemon thread."""
         try:
             with (
                 open(self.session_path, 'w', newline='', buffering=1) as csv_file,
@@ -165,7 +168,7 @@ class SerialIngestion:
                 while not self._stop_event.is_set():
                     raw = ser.readline()
                     if not raw:
-                        continue  # Timeout — loop to check stop_event
+                        continue  # Timeout â€” loop to check stop_event
 
                     wall_time = time.time()
 
@@ -242,10 +245,18 @@ class SerialIngestion:
             expected = (self._last_seq + 1) % 65_536
             if seq != expected:
                 dropped = (seq - expected) % 65_536
-                print(
-                    f"[DROP] seq={seq}, expected={expected}, gap={dropped}",
-                    flush=True,
-                )
+                if dropped > _MAX_REASONABLE_SEQ_GAP:
+                    print(
+                        f"[SEQ RESET] seq={seq}, expected={expected}, jump={dropped} "
+                        "(ignored for drop-rate)",
+                        flush=True,
+                    )
+                    dropped = 0
+                else:
+                    print(
+                        f"[DROP] seq={seq}, expected={expected}, gap={dropped}",
+                        flush=True,
+                    )
         self._last_seq = seq
 
         row = SensorRow(
@@ -260,7 +271,7 @@ class SerialIngestion:
         return row, dropped
 
 
-# ── Offline replay from saved session CSV ─────────────────────────────────────
+# â”€â”€ Offline replay from saved session CSV â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def replay_session(session_csv: str | Path, realtime: bool = False):
     """
@@ -311,3 +322,6 @@ def replay_session(session_csv: str | Path, realtime: bool = False):
             prev_wall = row.wall_time
 
             yield row
+
+
+

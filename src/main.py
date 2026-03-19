@@ -36,7 +36,7 @@ Optional interactive commands during live / replay
 Calibration workflow (live mode only)
 --------------------------------------
 1. Subject sits still, no caffeine for ≥4 h.
-2. Press Enter when ready; baseline capture runs for ≥3 min.
+2. Press Enter when ready; baseline capture runs for ≥30 s.
 3. (Optional) perform a known-dose session to fit personal slope.
 4. Monitoring begins; HR, tremor, and C(t) are displayed in the terminal.
 5. On Ctrl-C or q+Enter the session CSV and baseline.json are preserved.
@@ -183,17 +183,17 @@ def _run_baseline_phase(
     calibration: Calibration,
     body_weight_kg: float,
 ) -> None:
-    """Collect 3–5 min of resting data and finalise the baseline."""
+    """Collect at least 30 s of resting data and finalise the baseline."""
     print(BOLD("\n=== Phase 1: Resting Baseline Calibration ==="))
     print("  1. Sit completely still.")
     print("  2. Do NOT consume caffeine for at least 4 hours beforehand.")
-    print("  3. Press ENTER when ready to begin (3 minute minimum).")
+    print("  3. Press ENTER when ready to begin (30 second minimum).")
     input("  >> ")
 
     calibration.start_baseline_capture()
     processor.reset_buffers()
 
-    print("  Capturing… press ENTER to finish (minimum 3 minutes).")
+    print("  Capturing… press ENTER to finish (minimum 30 seconds).")
     capture_done = threading.Event()
     input_thread = threading.Thread(target=lambda: (input(), capture_done.set()), daemon=True)
     input_thread.start()
@@ -221,7 +221,7 @@ def _run_baseline_phase(
             print(
                 f"  Baseline: {elapsed:.0f}s elapsed, "
                 f"{n_hr} HR windows collected "
-                f"{'✓ ready' if calibration.baseline_complete else '(need 3+ min)'}",
+                f"{'✓ ready' if calibration.baseline_complete else '(need 30+ s)'}",
                 flush=True,
             )
             last_status_t = time.monotonic()
